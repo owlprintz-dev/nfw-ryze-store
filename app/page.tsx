@@ -1,10 +1,7 @@
-﻿"use client";
+"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-declare global {
-  interface Window { Square?: any }
-}
 
 type Apparel = {
   id: string;
@@ -113,7 +110,6 @@ export default function Home() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState("");
   const [paying, setPaying] = useState(false);
-  const cardRef = useRef<any>(null);
 
   const shownProducts = useMemo(() => {
     const term = query.toLowerCase();
@@ -136,32 +132,6 @@ export default function Home() {
   const basePrice = activeApparel ? garmentPrices[garment] : activeAccessory?.price || 0;
   const customPrice = customize ? (activeAccessory?.id.startsWith("bag-") ? 5 : activeApparel ? 8 : 0) : 0;
 
-  useEffect(() => {
-    if (!checkoutOpen || cardRef.current) return;
-    let cancelled = false;
-    let attempts = 0;
-    const start = async () => {
-      if (cancelled) return;
-      if (!window.Square) {
-        if (attempts++ < 40) window.setTimeout(start, 150);
-        else setPaymentStatus("The secure payment form could not load. Please refresh and try again.");
-        return;
-      }
-      try {
-        const payments = window.Square.payments(
-          process.env.NEXT_PUBLIC_SQUARE_APPLICATION_ID,
-          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID,
-        );
-        const card = await payments.card();
-        await card.attach("#square-card");
-        if (!cancelled) cardRef.current = card;
-      } catch {
-        setPaymentStatus("The secure payment form could not load. Please refresh and try again.");
-      }
-    };
-    start();
-    return () => { cancelled = true; };
-  }, [checkoutOpen]);
 
   useEffect(() => {
     fetch("/api/fundraiser")
@@ -212,21 +182,19 @@ export default function Home() {
     setCartOpen(true);
   }
 
-  async function payWithSquare() {
-    if (!cardRef.current || paying) return;
+  async function startHostedCheckout() {
+    if (paying) return;
     setPaying(true);
     setPaymentStatus("");
     try {
       if (!customerName.trim() || !customerEmail.trim() || !customerPhone.trim()) {
         throw new Error("Please enter your name, email, and phone number.");
       }
-      const tokenResult = await cardRef.current.tokenize();
-      if (tokenResult.status !== "OK") throw new Error("Please check your card details and try again.");
-      const response = await fetch("/api/payments", {
+
+      const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sourceId: tokenResult.token,
           customer: {
             name: customerName.trim(),
             email: customerEmail.trim(),
@@ -238,7 +206,6 @@ export default function Home() {
             customized: item.customized,
             name: item.name,
             detail: item.detail,
-            price: item.price,
             size: item.size,
             color: item.color,
             playerName: item.playerName,
@@ -248,14 +215,15 @@ export default function Home() {
         }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Payment could not be completed.");
+      if (!response.ok || !result.checkoutUrl) {
+        throw new Error(result.error || "Square checkout could not be started.");
+      }
 
-      let uploadBackupSaved = true;
       if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
         const formData = new FormData();
-        formData.set("form-name", "orders");
+        formData.set("form-name", "nfw-ryze-orders");
         formData.set("order_id", result.orderId || "");
-        formData.set("payment_id", result.paymentId || "");
+        formData.set("square_payment_id", "Hosted checkout pending");
         formData.set("customer_name", customerName.trim());
         formData.set("customer_email", customerEmail.trim());
         formData.set("customer_phone", customerPhone.trim());
@@ -267,30 +235,14 @@ export default function Home() {
           cart.map((item) => `${item.name}: ${item.detail} — $${item.price.toFixed(2)}`).join("\n"),
         );
         cart.filter((item) => item.file).slice(0, 5).forEach((item, index) => {
-          formData.set(`photo_${index + 1}`, item.file as File);
+          formData.set(`athlete_photo_${index + 1}`, item.file as File);
         });
-        try {
-          const backupResponse = await fetch("/order.html", { method: "POST", body: formData });
-          uploadBackupSaved = backupResponse.ok;
-        } catch {
-          uploadBackupSaved = false;
-        }
+        try { await fetch("/order.html", { method: "POST", body: formData }); } catch { /* Square checkout can still continue */ }
       }
 
-      if (result.fundraiserCredit) {
-        setFundraiserRaised((current) => current + result.fundraiserCredit / 100);
-      }
-      const confirmation = result.emailSent
-        ? " A complete confirmation was emailed to you."
-        : " Your complete order is saved in Square.";
-      const backupWarning = uploadBackupSaved
-        ? ""
-        : " The photo upload could not be saved; please text 817-627-5943 with your order number.";
-      setPaymentStatus(`Payment approved. Order ${result.orderId || result.paymentId} is saved.${confirmation}${backupWarning}`);
-      setCart([]);
+      window.location.assign(result.checkoutUrl);
     } catch (error) {
-      setPaymentStatus(error instanceof Error ? error.message : "Payment could not be completed.");
-    } finally {
+      setPaymentStatus(error instanceof Error ? error.message : "Square checkout could not be started.");
       setPaying(false);
     }
   }
@@ -417,17 +369,17 @@ export default function Home() {
               </div>
               {!checkoutOpen ? <button className="checkout" onClick={() => setCheckoutOpen(true)}>Continue to secure checkout</button> :
                 <div className="payment-panel">
-                  <p className="payment-title">Secure card payment</p>
+                  <p className="payment-title">Secure Square checkout</p>
                   <div className="checkout-fields">
                     <label><span>Full name</span><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} autoComplete="name" /></label>
                     <label><span>Email</span><input type="email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} autoComplete="email" /></label>
                     <label><span>Phone</span><input type="tel" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} autoComplete="tel" /></label>
                   </div>
-                  <div id="square-card" />
-                  <button className="checkout" disabled={paying} onClick={payWithSquare}>{paying ? "Processing…" : `Pay ${grandTotal.toFixed(2)}`}</button>
+                  <p className="note">You will finish payment on Square’s secure checkout page.</p>
+                  <button className="checkout" disabled={paying} onClick={startHostedCheckout}>{paying ? "Opening Square…" : `Continue to Square · $${grandTotal.toFixed(2)}`}</button>
                 </div>}
               {paymentStatus && <p className={paymentStatus.startsWith("Payment approved") ? "payment-status success" : "payment-status"}>{paymentStatus}</p>}
-              <p className="checkout-note">Secure payment by Square · Team delivery</p>
+              <p className="checkout-note">Payment processed securely on Square · Team delivery</p>
             </>}
         </aside>
       </div>}
