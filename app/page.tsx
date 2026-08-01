@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
+import { supabase } from "@/lib/supabase";
 
 type Apparel = {
   id: string;
   name: string;
   image: string;
+  description?: string;
+  personalization?: boolean;
+  prices?: Record<string, number>;
   defaultGarment?: string;
   images: Partial<Record<string, string>>;
   colors?: { name: string; image: string; images: Partial<Record<string, string>> }[];
@@ -66,6 +69,50 @@ const accessories: Accessory[] = [
 ];
 
 const garmentPrices: Record<string, number> = { "T-Shirt": 25, "Dry-Fit": 30, Crewneck: 40, Hoodie: 50 };
+const garmentNames = Object.keys(garmentPrices);
+const placeholderImage = "/products/classic-shirt.png";
+const personalizedTumblerName = "NFW Ryze Personalized Tumbler";
+const personalizedTumblerColors = ["Navy", "White"];
+const localProductImage = (fileName: string) => `/products/${encodeURIComponent(fileName)}`;
+const logoAndFamilyImages: Record<string, Partial<Record<string, string>>> = {
+  "logo tee- white": {
+    "T-Shirt": localProductImage("Logo tee white.png"),
+    "Dry-Fit": localProductImage("Logo tee white.png"),
+    Crewneck: localProductImage("logo crewneck white.png"),
+    Hoodie: localProductImage("logo hoodie white.png"),
+  },
+  "logo tee- navy": {
+    "T-Shirt": localProductImage("Logo tee navy.png"),
+    "Dry-Fit": localProductImage("Logo tee navy.png"),
+    Crewneck: localProductImage("logo crewneck navy.png"),
+    Hoodie: localProductImage("Logo hoodie navy.png"),
+  },
+  "logo tee - hot pink": {
+    "T-Shirt": localProductImage("Logo Tee Pink.png"),
+    "Dry-Fit": localProductImage("Logo Tee Pink.png"),
+    Crewneck: localProductImage("logo crewneck pink.png"),
+    Hoodie: localProductImage("Logo Hoodie Pink.png"),
+  },
+  "logo tee- lime green": {
+    "T-Shirt": localProductImage("Logo tee Green.png"),
+    "Dry-Fit": localProductImage("Logo tee Green.png"),
+    Crewneck: localProductImage("logo crewneck green.png"),
+    Hoodie: localProductImage("Logo hoodie Green.png"),
+  },
+  "#ryzefamily": {
+    "T-Shirt": localProductImage("#ryzefamily navy shirt.png"),
+    "Dry-Fit": localProductImage("#ryzefamily navy shirt.png"),
+    Crewneck: localProductImage("#ryzefamily crew.png"),
+    Hoodie: localProductImage("#ryzefamily hoodie.png"),
+  },
+};
+
+function getMappedProductImages(productName: string) {
+  const normalizedName = productName.trim().toLowerCase();
+  return logoAndFamilyImages[normalizedName]
+    || (normalizedName.startsWith("#ryzefamily") ? logoAndFamilyImages["#ryzefamily"] : undefined);
+}
+
 const sizes = ["YS", "YM", "YL", "YXL", "AS", "AM", "AL", "AXL", "2XL", "3XL"];
 const apparelDisplayOrder = [
   "lime-team", "grind-pink", "classic-gray", "keep-ryzing", "color-rush",
@@ -110,15 +157,45 @@ export default function Home() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState("");
   const [paying, setPaying] = useState(false);
+  const [supabaseApparel, setSupabaseApparel] = useState<Apparel[]>([]);
+  const [supabaseAccessories, setSupabaseAccessories] = useState<Accessory[]>([]);
+
+  const allAccessories = useMemo(() => {
+    const products = new Map(accessories.map((product) => [product.id, product]));
+    const usedIds = new Set([...products.keys(), ...apparel.map((product) => product.id)]);
+    supabaseAccessories.forEach((product) => {
+      if (!usedIds.has(product.id)) {
+        products.set(product.id, product);
+        usedIds.add(product.id);
+      }
+    });
+    return [...products.values()];
+  }, [supabaseAccessories]);
+
+  const allApparel = useMemo(() => {
+    const products = new Map(apparel.map((product) => [product.id, product]));
+    const usedIds = new Set([...products.keys(), ...allAccessories.map((product) => product.id)]);
+    supabaseApparel.forEach((product) => {
+      if (!usedIds.has(product.id)) {
+        products.set(product.id, product);
+        usedIds.add(product.id);
+      }
+    });
+    return [...products.values()];
+  }, [allAccessories, supabaseApparel]);
 
   const shownProducts = useMemo(() => {
     const term = query.toLowerCase();
-    const clothes = apparel
+    const clothes = allApparel
       .filter((p) => p.name.toLowerCase().includes(term))
-      .sort((a, b) => apparelDisplayOrder.indexOf(a.id) - apparelDisplayOrder.indexOf(b.id));
-    const extras = accessories.filter((p) => p.name.toLowerCase().includes(term));
+      .sort((a, b) => {
+        const aOrder = apparelDisplayOrder.indexOf(a.id);
+        const bOrder = apparelDisplayOrder.indexOf(b.id);
+        return (aOrder < 0 ? Number.MAX_SAFE_INTEGER : aOrder) - (bOrder < 0 ? Number.MAX_SAFE_INTEGER : bOrder);
+      });
+    const extras = allAccessories.filter((p) => p.name.toLowerCase().includes(term));
     return [...clothes, ...extras];
-  }, [query]);
+  }, [allAccessories, allApparel, query]);
   const total = cart.reduce((sum, item) => sum + item.price, 0);
   const tax = Math.round(total * 0.0825 * 100) / 100;
   const grandTotal = total + tax;
@@ -126,11 +203,13 @@ export default function Home() {
   const activeApparel = isApparel ? selected as Apparel : null;
   const activeAccessory = selected && "price" in selected ? selected as Accessory : null;
   const isBagTag = Boolean(activeAccessory?.id.startsWith("bag-"));
+  const isPersonalizedTumbler = activeAccessory?.name === personalizedTumblerName;
   const needsDetails = customize || Boolean(activeAccessory?.customizable && !isBagTag);
   const colorSet = activeApparel?.colors?.find((c) => c.name === color);
   const modalImage = activeApparel ? (colorSet?.images[garment] || activeApparel.images[garment] || colorSet?.image || activeApparel.image) : activeAccessory?.image;
-  const basePrice = activeApparel ? garmentPrices[garment] : activeAccessory?.price || 0;
-  const customPrice = customize ? (activeAccessory?.id.startsWith("bag-") ? 5 : activeApparel ? 8 : 0) : 0;
+  const activeGarmentPrices = activeApparel?.prices || garmentPrices;
+  const basePrice = activeApparel ? activeGarmentPrices[garment] : activeAccessory?.price || 0;
+  const customPrice = customize ? (isBagTag || isPersonalizedTumbler ? 5 : activeApparel ? 8 : 0) : 0;
 
 
   useEffect(() => {
@@ -140,11 +219,71 @@ export default function Home() {
       .catch(() => setFundraiserRaised(0));
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    supabase
+      .from("products")
+      .select("id,name,description,price,category,image,personalization,tshirt_price,dryfit_price,crewneck_price,hoodie_price")
+      .eq("active", true)
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return;
+
+        const products = data
+          .filter((row) => String(row.category || "").toLowerCase() === "apparel")
+          .map((row): Apparel | null => {
+            const id = String(row.id ?? "").trim();
+            const name = String(row.name ?? "").trim();
+            if (!id || !name) return null;
+
+            const fallbackPrice = Number(row.price);
+            const price = (value: unknown, fallback: number) => {
+              const amount = Number(value);
+              return Number.isFinite(amount) && amount >= 0
+                ? amount
+                : Number.isFinite(fallbackPrice) && fallbackPrice >= 0 ? fallbackPrice : fallback;
+            };
+            const imageValue = String(row.image ?? "").trim();
+            const fallbackImage = imageValue.startsWith("/") || /^https?:\/\//i.test(imageValue) ? imageValue : placeholderImage;
+            const mappedImages = getMappedProductImages(name);
+            const image = mappedImages?.["T-Shirt"] || fallbackImage;
+
+            return {
+              id,
+              name,
+              description: String(row.description ?? "").trim() || undefined,
+              image,
+              personalization: row.personalization !== false,
+              prices: {
+                "T-Shirt": price(row.tshirt_price, garmentPrices["T-Shirt"]),
+                "Dry-Fit": price(row.dryfit_price, garmentPrices["Dry-Fit"]),
+                Crewneck: price(row.crewneck_price, garmentPrices.Crewneck),
+                Hoodie: price(row.hoodie_price, garmentPrices.Hoodie),
+              },
+              images: mappedImages || Object.fromEntries(garmentNames.map((garmentName) => [garmentName, image])),
+            };
+          })
+          .filter((product): product is Apparel => product !== null);
+
+        setSupabaseApparel(products);
+        setSupabaseAccessories(data
+          .filter((row) => String(row.category || "").toLowerCase() === "personalized" && String(row.name || "").trim() === personalizedTumblerName)
+          .map((row): Accessory | null => {
+            const id = String(row.id ?? "").trim();
+            if (!id) return null;
+            return { id, name: personalizedTumblerName, price: 25, image: "/products/tumblers.png" };
+          })
+          .filter((product): product is Accessory => product !== null));
+      });
+
+    return () => { cancelled = true; };
+  }, []);
+
   function openProduct(product: Apparel | Accessory) {
     setSelected(product);
     setGarment("images" in product ? product.defaultGarment || "T-Shirt" : "T-Shirt");
     setSize("AM");
-    setColor(product && "colors" in product && product.colors ? product.colors[0].name : "Lime");
+    setColor(product.name === personalizedTumblerName ? personalizedTumblerColors[0] : product && "colors" in product && product.colors ? product.colors[0].name : "Lime");
     setCustomize(Boolean("upload" in product && product.upload));
     setPlayerName("");
     setPlayerNumber("");
@@ -159,7 +298,7 @@ export default function Home() {
     const details = [
       activeApparel ? garment : "",
       activeApparel ? size : "",
-      activeApparel?.colors ? color : "",
+      activeApparel?.colors || isPersonalizedTumbler ? color : "",
       playerName ? `${playerName} #${playerNumber}` : "",
       fileName ? `Photo: ${fileName}` : "",
     ].filter(Boolean).join(" · ");
@@ -172,7 +311,7 @@ export default function Home() {
       detail: details,
       price: basePrice + customPrice,
       size: activeApparel ? size : undefined,
-      color: activeApparel?.colors ? color : undefined,
+      color: activeApparel?.colors || isPersonalizedTumbler ? color : undefined,
       playerName: playerName.trim() || undefined,
       playerNumber: playerNumber.trim() || undefined,
       fileName: fileName || undefined,
@@ -262,7 +401,7 @@ export default function Home() {
           <h1>Every point.<br />Every play.<br /><em>We Ryze.</em></h1>
           <p>Official team gear made for athletes, families, coaches, and the loudest fans in the gym.</p>
           <div className="hero-actions"><a className="primary" href="#shop">Shop the collection</a><a className="secondary" href="#custom">Create a custom shirt</a></div>
-          <div className="hero-notes"><span>19 apparel designs</span><span>Player personalization</span><span>Team delivery</span></div>
+          <div className="hero-notes"><span>{allApparel.length} apparel designs</span><span>Player personalization</span><span>Team delivery</span></div>
         </div>
         <div className="hero-art">
           <img src="/products/tatym-earned.png" alt="NFW Ryze Volleyball Club athlete wearing Earned Not Given apparel" />
@@ -292,8 +431,8 @@ export default function Home() {
         <div className="product-grid">
           {shownProducts.map((product) => "images" in product ? (
               <article className="product-card" key={product.id}>
-                <button className="product-image" onClick={() => openProduct(product)}><img src={product.image} alt={product.name} /></button>
-                <div className="product-info"><div><p className="mini">4 GARMENT OPTIONS</p><h3>{product.name}</h3><p>From $25 · Add player name & number +$8</p></div><button onClick={() => openProduct(product)}>Choose options</button></div>
+                <button className="product-image" onClick={() => openProduct(product)}><img src={product.image} alt={product.name} onError={(event) => { event.currentTarget.src = placeholderImage; }} /></button>
+                <div className="product-info"><div><p className="mini">4 GARMENT OPTIONS</p><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<p>From ${Math.min(...Object.values(product.prices || garmentPrices)).toFixed(2)} · Add player name & number +$8</p></div><button onClick={() => openProduct(product)}>Choose options</button></div>
               </article>
             ) : (
               <article className={`product-card accessory ${product.id.startsWith("bag-") ? "bag-tag-card" : ""}`} key={product.id}>
@@ -310,7 +449,7 @@ export default function Home() {
       </section>
 
       <section id="details" className="details">
-        <div><span>01</span><h3>Choose your design</h3><p>Pick from 19 team looks, fan gear, accessories, and custom products.</p></div>
+        <div><span>01</span><h3>Choose your design</h3><p>Pick from {allApparel.length} team looks, fan gear, accessories, and custom products.</p></div>
         <div><span>02</span><h3>Make it yours</h3><p>Add a player name and number to apparel for $8 or bag tags for $5.</p></div>
         <div><span>03</span><h3>Delivered together</h3><p>Orders are prepared and delivered together to the Ryze Volleyball Club.</p></div>
       </section>
@@ -330,16 +469,26 @@ export default function Home() {
       {selected && <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setSelected(null)}>
         <section className="modal" role="dialog" aria-modal="true" aria-label={`Customize ${selected.name}`}>
           <button className="close" onClick={() => setSelected(null)} aria-label="Close">×</button>
-          <div className="modal-image"><img src={modalImage} alt={selected.name} /></div>
+          <div className="modal-image"><img src={modalImage} alt={selected.name} onError={(event) => { event.currentTarget.src = placeholderImage; }} /></div>
           <div className="modal-content">
             <p className="eyebrow">{activeApparel ? "TEAM APPAREL" : "RYZE ACCESSORIES"}</p>
             <h2>{selected.name}</h2>
             <p className="modal-price">${(basePrice + customPrice).toFixed(2)}</p>
             {activeApparel && <>
-              <fieldset><legend>Garment</legend><div className="option-row">{Object.keys(garmentPrices).map((g) => <button type="button" className={garment === g ? "selected" : ""} onClick={() => setGarment(g)} key={g}>{g}<small>${garmentPrices[g]}</small></button>)}</div></fieldset>
+              <fieldset><legend>Garment</legend><div className="option-row">{garmentNames.map((g) => <button type="button" className={garment === g ? "selected" : ""} onClick={() => setGarment(g)} key={g}>{g}<small>${activeGarmentPrices[g].toFixed(2)}</small></button>)}</div></fieldset>
               <label>Size<select value={size} onChange={(e) => setSize(e.target.value)}>{sizes.map((s) => <option key={s}>{s}</option>)}</select></label>
               {activeApparel.colors && <fieldset><legend>Color</legend><div className="option-row">{activeApparel.colors.map((c) => <button type="button" className={color === c.name ? "selected" : ""} onClick={() => setColor(c.name)} key={c.name}>{c.name}</button>)}</div></fieldset>}
-              <label className="check"><input type="checkbox" checked={customize} onChange={(e) => setCustomize(e.target.checked)} /> Add player name & number to back (+$8)</label>
+              {activeApparel.personalization !== false && <label className="check"><input type="checkbox" checked={customize} onChange={(e) => setCustomize(e.target.checked)} /> Add player name & number to back (+$8)</label>}
+            </>}
+            {isPersonalizedTumbler && <>
+              <fieldset><legend>Color</legend><div className="option-row">{personalizedTumblerColors.map((choice) => <button type="button" className={color === choice ? "selected" : ""} onClick={() => setColor(choice)} key={choice}>{choice}</button>)}</div></fieldset>
+              <label className="check"><input type="checkbox" checked={customize} onChange={(e) => {
+                setCustomize(e.target.checked);
+                if (!e.target.checked) {
+                  setPlayerName("");
+                  setPlayerNumber("");
+                }
+              }} /> Add player name & number (+$5)</label>
             </>}
             {isBagTag && <label className="check"><input type="checkbox" checked={customize} onChange={(e) => setCustomize(e.target.checked)} /> Add player name & number (+$5)</label>}
             {activeAccessory?.customizable && !activeAccessory.upload && !isBagTag && <p className="note">Personalization is included in this item.</p>}
@@ -386,4 +535,3 @@ export default function Home() {
     </main>
   );
 }
-

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
 
 const SQUARE_VERSION = "2026-07-15";
+const PERSONALIZED_TUMBLER_NAME = "NFW Ryze Personalized Tumbler";
+const PERSONALIZED_TUMBLER_COLORS = new Set(["Navy", "White"]);
 const garmentPrices: Record<string, number> = { "T-Shirt": 2500, "Dry-Fit": 3000, Crewneck: 4000, Hoodie: 5000 };
 const apparelIds = new Set([
   "lime-team", "classic-gray", "keep-ryzing", "grind-pink", "ryze-club", "every-point",
@@ -18,21 +21,83 @@ type OrderItem = {
   productId?: string; garment?: string; customized?: boolean; name?: string; detail?: string;
   size?: string; color?: string; playerName?: string; playerNumber?: string; fileName?: string;
 };
+type SupabaseApparel = { prices: Record<string, number>; personalization: boolean };
+type SupabaseProducts = { apparel: Map<string, SupabaseApparel>; personalizedTumblerIds: Set<string> };
 
 function clean(value?: string, max = 180) {
   return String(value || "").replace(/[<>]/g, "").trim().slice(0, max);
 }
 
-function priceItem(item: OrderItem) {
+function priceItem(item: OrderItem, supabaseProducts: SupabaseProducts) {
   if (!item.productId) throw new Error("Invalid item.");
   if (apparelIds.has(item.productId)) {
     const base = item.garment ? garmentPrices[item.garment] : undefined;
     if (!base) throw new Error("Invalid apparel option.");
     return base + (item.customized ? 800 : 0);
   }
+  const databaseProduct = supabaseProducts.apparel.get(item.productId);
+  if (databaseProduct) {
+    const base = item.garment ? databaseProduct.prices[item.garment] : undefined;
+    if (!base || (item.customized && !databaseProduct.personalization)) {
+      throw new Error("Invalid apparel option.");
+    }
+    return base + (item.customized ? 800 : 0);
+  }
+  if (supabaseProducts.personalizedTumblerIds.has(item.productId)) {
+    if (!item.color || !PERSONALIZED_TUMBLER_COLORS.has(item.color) || item.garment || item.size) {
+      throw new Error("Invalid tumbler option.");
+    }
+    if (item.customized && (!clean(item.playerName) || !clean(item.playerNumber))) {
+      throw new Error("Tumbler personalization is incomplete.");
+    }
+    return 2500 + (item.customized ? 500 : 0);
+  }
   const base = accessoryPrices[item.productId];
   if (!base) throw new Error("Invalid store item.");
   return base + (item.productId.startsWith("bag-") && item.customized ? 500 : 0);
+}
+
+async function getSupabaseProducts(): Promise<SupabaseProducts> {
+  const products: SupabaseProducts = { apparel: new Map(), personalizedTumblerIds: new Set() };
+  const usedIds = new Set([...apparelIds, ...Object.keys(accessoryPrices)]);
+  const { data, error } = await supabase
+    .from("products")
+    .select("id,name,price,category,active,personalization,tshirt_price,dryfit_price,crewneck_price,hoodie_price")
+    .eq("active", true);
+  if (error || !data) return products;
+
+  data.forEach((row) => {
+    const id = String(row.id ?? "").trim();
+    if (!id || usedIds.has(id)) return;
+    const category = String(row.category || "").toLowerCase();
+    if (category === "personalized" && String(row.name || "").trim() === PERSONALIZED_TUMBLER_NAME) {
+      products.personalizedTumblerIds.add(id);
+      usedIds.add(id);
+      return;
+    }
+    if (category !== "apparel") return;
+
+    const fallbackPrice = Number(row.price);
+    const cents = (value: unknown, fallback: number) => {
+      const amount = Number(value);
+      const dollars = Number.isFinite(amount) && amount > 0
+        ? amount
+        : Number.isFinite(fallbackPrice) && fallbackPrice > 0 ? fallbackPrice : fallback;
+      return Math.round(dollars * 100);
+    };
+    products.apparel.set(id, {
+      personalization: row.personalization !== false,
+      prices: {
+        "T-Shirt": cents(row.tshirt_price, 25),
+        "Dry-Fit": cents(row.dryfit_price, 30),
+        Crewneck: cents(row.crewneck_price, 40),
+        Hoodie: cents(row.hoodie_price, 50),
+      },
+    });
+    usedIds.add(id);
+  });
+
+  return products;
 }
 
 function itemNote(item: OrderItem) {
@@ -64,6 +129,7 @@ export async function POST(request: Request) {
     if (!clean(customer.name) || !clean(customer.email) || !clean(customer.phone)) {
       return NextResponse.json({ error: "Please enter your name, email, and phone number." }, { status: 400 });
     }
+    const supabaseProducts = await getSupabaseProducts();
 
     const origin = new URL(request.url).origin;
     const response = await fetch("https://connect.squareup.com/v2/online-checkout/payment-links", {
@@ -81,9 +147,9 @@ export async function POST(request: Request) {
           reference_id: `NFW-${Date.now()}`,
           line_items: body.items.map((item) => ({
             name: clean(item.name) || clean(item.productId) || "NFW Ryze item",
-            variation_name: clean(item.garment) || "Standard",
+            variation_name: clean(item.garment) || clean(item.color) || "Standard",
             quantity: "1",
-            base_price_money: { amount: priceItem(item), currency: "USD" },
+            base_price_money: { amount: priceItem(item, supabaseProducts), currency: "USD" },
             note: itemNote(item),
           })),
           taxes: [{ name: "Texas Sales Tax", percentage: "8.25", scope: "ORDER" }],
