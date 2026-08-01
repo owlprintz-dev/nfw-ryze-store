@@ -5,6 +5,7 @@ const SQUARE_VERSION = "2026-07-15";
 const PERSONALIZED_TUMBLER_NAME = "NFW Ryze Personalized Tumbler";
 const PERSONALIZED_TUMBLER_COLORS = new Set(["Navy", "White"]);
 const garmentPrices: Record<string, number> = { "T-Shirt": 2500, "Dry-Fit": 3000, Crewneck: 4000, Hoodie: 5000 };
+const fundraiserContributions: Record<string, number> = { "T-Shirt": 300, "Dry-Fit": 300, Crewneck: 500, Hoodie: 700 };
 const apparelIds = new Set([
   "lime-team", "classic-gray", "keep-ryzing", "grind-pink", "ryze-club", "every-point",
   "grind-lime", "graffiti", "starburst", "retro", "electric", "parent", "color-rush",
@@ -57,6 +58,11 @@ function priceItem(item: OrderItem, supabaseProducts: SupabaseProducts) {
   return base + (item.productId.startsWith("bag-") && item.customized ? 500 : 0);
 }
 
+function fundraiserContribution(item: OrderItem, supabaseProducts: SupabaseProducts) {
+  if (!item.productId || (!apparelIds.has(item.productId) && !supabaseProducts.apparel.has(item.productId))) return 0;
+  return item.garment ? fundraiserContributions[item.garment] || 0 : 0;
+}
+
 async function getSupabaseProducts(): Promise<SupabaseProducts> {
   const products: SupabaseProducts = { apparel: new Map(), personalizedTumblerIds: new Set() };
   const usedIds = new Set([...apparelIds, ...Object.keys(accessoryPrices)]);
@@ -100,8 +106,9 @@ async function getSupabaseProducts(): Promise<SupabaseProducts> {
   return products;
 }
 
-function itemNote(item: OrderItem) {
+function itemNote(item: OrderItem, fundraiserCents: number) {
   return [
+    fundraiserCents > 0 && `FUNDRAISER_CONTRIBUTION_CENTS=${fundraiserCents}`,
     item.garment && `Garment: ${clean(item.garment)}`,
     item.size && `Size: ${clean(item.size)}`,
     item.color && `Color: ${clean(item.color)}`,
@@ -150,7 +157,7 @@ export async function POST(request: Request) {
             variation_name: clean(item.garment) || clean(item.color) || "Standard",
             quantity: "1",
             base_price_money: { amount: priceItem(item, supabaseProducts), currency: "USD" },
-            note: itemNote(item),
+            note: itemNote(item, fundraiserContribution(item, supabaseProducts)),
           })),
           taxes: [{ name: "Texas Sales Tax", percentage: "8.25", scope: "ORDER" }],
         },

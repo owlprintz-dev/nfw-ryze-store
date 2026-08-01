@@ -69,6 +69,7 @@ const accessories: Accessory[] = [
 ];
 
 const garmentPrices: Record<string, number> = { "T-Shirt": 25, "Dry-Fit": 30, Crewneck: 40, Hoodie: 50 };
+const fundraiserContributions: Record<string, number> = { "T-Shirt": 3, "Dry-Fit": 3, Crewneck: 5, Hoodie: 7 };
 const garmentNames = Object.keys(garmentPrices);
 const placeholderImage = "/products/classic-shirt.png";
 const personalizedTumblerName = "NFW Ryze Personalized Tumbler";
@@ -197,6 +198,7 @@ export default function Home() {
     return [...clothes, ...extras];
   }, [allAccessories, allApparel, query]);
   const total = cart.reduce((sum, item) => sum + item.price, 0);
+  const cartFundraiserContribution = cart.reduce((sum, item) => sum + (item.garment ? fundraiserContributions[item.garment] || 0 : 0), 0);
   const tax = Math.round(total * 0.0825 * 100) / 100;
   const grandTotal = total + tax;
   const isApparel = selected && "images" in selected;
@@ -417,7 +419,7 @@ export default function Home() {
         <div className="fundraiser-counter">
           <span className="counter-label">TOTAL RAISED</span>
           <div className="counter-head"><strong>${fundraiserRaised.toLocaleString()}</strong></div>
-          <div className="counter-foot"><b>Thank you, Ryze Family!</b><span>{total > 0 ? `Your bag adds $${total.toFixed(2)} when purchased` : "Every order supports our athletes"}</span></div>
+          <div className="counter-foot"><b>Thank you, Ryze Family!</b><span>{cart.length > 0 ? `Your bag contributes $${cartFundraiserContribution.toFixed(2)} when purchased` : "Every apparel order supports our athletes"}</span></div>
         </div>
       </section>
 

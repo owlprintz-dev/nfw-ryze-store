@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 const TAX_RATE = 0.0825;
 const SQUARE_VERSION = "2026-07-15";
 const garmentPrices: Record<string, number> = { "T-Shirt": 2500, "Dry-Fit": 3000, Crewneck: 4000, Hoodie: 5000 };
+const fundraiserContributions: Record<string, number> = { "T-Shirt": 300, "Dry-Fit": 300, Crewneck: 500, Hoodie: 700 };
 const apparelIds = new Set([
   "lime-team", "classic-gray", "keep-ryzing", "grind-pink", "ryze-club", "every-point",
   "grind-lime", "graffiti", "starburst", "retro", "electric", "parent", "color-rush",
@@ -36,9 +37,15 @@ function priceItem(item: OrderItem) {
   return base + (item.productId.startsWith("bag-") && item.customized ? 500 : 0);
 }
 
+function fundraiserContribution(item: OrderItem) {
+  if (!item.productId || !apparelIds.has(item.productId)) return 0;
+  return item.garment ? fundraiserContributions[item.garment] || 0 : 0;
+}
+
 function itemNote(item: OrderItem) {
+  const fundraiserCents = fundraiserContribution(item);
   return [
-    item.productId && apparelIds.has(item.productId) ? "FUNDRAISER_APPAREL" : "STORE_ITEM",
+    fundraiserCents > 0 ? `FUNDRAISER_CONTRIBUTION_CENTS=${fundraiserCents}` : "STORE_ITEM",
     item.garment && `Garment: ${clean(item.garment)}`,
     item.size && `Size: ${clean(item.size)}`,
     item.color && `Color: ${clean(item.color)}`,
@@ -92,7 +99,7 @@ export async function POST(request: Request) {
     const subtotal = body.items.reduce((sum, item) => sum + priceItem(item), 0);
     const tax = Math.round(subtotal * TAX_RATE);
     const amount = subtotal + tax;
-    const fundraiserCredit = body.items.reduce((sum, item) => sum + (item.productId && apparelIds.has(item.productId) ? priceItem(item) : 0), 0);
+    const fundraiserCredit = body.items.reduce((sum, item) => sum + fundraiserContribution(item), 0);
     const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Square-Version": SQUARE_VERSION };
 
     const orderResponse = await fetch("https://connect.squareup.com/v2/orders", {
